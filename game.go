@@ -3,21 +3,34 @@ package main
 import (
 	"fmt"
 	"math/rand"
-	"net"
+	// "net"
 	// "strconv"
 	"time"
 	// "strings"
-	"io"
-	"encoding/json"
+	// "io"
+	"net/http"
+	// "encoding/json"
+	"github.com/gorilla/mux"
+	"github.com/gorilla/websocket"
 )
 
 const (
 	port = ":9999"
 )
 
+var upgrader = websocket.Upgrader{
+	ReadBufferSize:  1024,
+	WriteBufferSize: 1024,
+}
+
 type Game struct {
     TargetNumber int `json:"target_number"`
-    Guesses      map[net.Conn]int
+    Guesses      map[*websocket.Conn]int
+}
+
+type Client struct {
+    Conn  *websocket.Conn
+    Guess int
 }
 
 type ClientMessage struct {
@@ -30,78 +43,82 @@ type ServerMessage struct {
 }
 
 func main() {
-	rand.Seed(time.Now().UnixNano())
-	listener, err := net.Listen("tcp", port)
-	if err != nil {
-		fmt.Println("Error starting server:", err)
-		return
-	}
-	defer listener.Close()
+    rand.Seed(time.Now().UnixNano())
 
-	fmt.Println("Game server started on port", port)
+    game := NewGame()
 
-	game := NewGame()
+    r := mux.NewRouter()
+    r.HandleFunc("/", ServeHome)
+    r.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+        ServeWebSocket(w, r, game)
+    })
 
-	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			fmt.Println("Error accepting connection:", err)
-			continue
-		}
-		go handleClient(conn, game)
-	}
+    http.Handle("/", r)
+
+    fmt.Println("Game server started on port", port)
+    err := http.ListenAndServe(port, nil)
+    if err != nil {
+        fmt.Println("Error starting server:", err)
+    }
 }
 
 func NewGame() *Game {
     return &Game{
         TargetNumber: rand.Intn(100),
-        Guesses:      make(map[net.Conn]int),
+        Guesses:      make(map[*websocket.Conn]int),
     }
 }
 
-func handleClient(conn net.Conn, game *Game) {
-    defer conn.Close()
+func ServeHome(w http.ResponseWriter, r *http.Request) {
+	http.ServeFile(w, r, "index.html")
+}
 
-    fmt.Println("New player connected:", conn.RemoteAddr())
+func ServeWebSocket(w http.ResponseWriter, r *http.Request, game *Game) {
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		fmt.Println("Error upgrading to WebSocket:", err)
+		return
+	}
+	defer conn.Close()
 
-    // Welcome message
-    conn.Write([]byte("Welcome to the Guess the Number game!\n"))
+	game.Guesses[conn] = -1 // Initialize the guess
 
-    decoder := json.NewDecoder(conn)
-    encoder := json.NewEncoder(conn)
+	for {
+		var message struct {
+			Command string `json:"command"`
+			Guess   int    `json:"guess"`
+		}
 
-    for {
-        var clientMessage ClientMessage
-        if err := decoder.Decode(&clientMessage); err == io.EOF {
-            fmt.Println("Client disconnected:", conn.RemoteAddr())
-            return
-        } else if err != nil {
-            fmt.Println("Error decoding message:", err)
-            return
-        }
+		err := conn.ReadJSON(&message)
+		if err != nil {
+			fmt.Println("Error reading message:", err)
+			delete(game.Guesses, conn)
+			break
+		}
 
-        switch clientMessage.Command {
-        case "guess":
-            guess := clientMessage.Guess
-            game.Guesses[conn] = guess
+		switch message.Command {
+		case "guess":
+			game.Guesses[conn] = message.Guess
 
-            if guess == game.TargetNumber {
-                response := ServerMessage{Message: "Congratulations! You guessed the correct number."}
-                encoder.Encode(response)
-                return
-            } else if guess < game.TargetNumber {
-                response := ServerMessage{Message: "Try a higher number."}
-                encoder.Encode(response)
-            } else {
-                response := ServerMessage{Message: "Try a lower number."}
-                encoder.Encode(response)
-            }
-        case "quit":
-            fmt.Println("Client disconnected:", conn.RemoteAddr())
-            return
-        default:
-            response := ServerMessage{Message: "Invalid command."}
-            encoder.Encode(response)
-        }
-    }
+			if message.Guess == game.TargetNumber {
+				response := struct {
+					Message string `json:"message"`
+					Win     bool   `json:"win"`
+				}{
+					Message: "Congratulations! You guessed the correct number.",
+					Win:     true,
+				}
+				conn.WriteJSON(response)
+			} else if message.Guess < game.TargetNumber {
+				conn.WriteJSON(struct{ Message string `json:"message"` }{Message: "Try a higher number."})
+			} else {
+				conn.WriteJSON(struct{ Message string `json:"message"` }{Message: "Try a lower number."})
+			}
+		case "quit":
+			delete(game.Guesses, conn)
+			break
+		default:
+			conn.WriteJSON(struct{ Message string `json:"message"` }{Message: "Invalid command."})
+		}
+	}
 }
