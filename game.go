@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"math/rand"
 	"net"
-	"strconv"
+	// "strconv"
 	"time"
-	"strings"
+	// "strings"
+	"io"
+	"encoding/json"
 )
 
 const (
@@ -14,8 +16,17 @@ const (
 )
 
 type Game struct {
-	targetNumber int
-	guesses      map[net.Conn]int
+    TargetNumber int `json:"target_number"`
+    Guesses      map[net.Conn]int
+}
+
+type ClientMessage struct {
+    Command string `json:"command"`
+    Guess   int    `json:"guess"`
+}
+
+type ServerMessage struct {
+    Message string `json:"message"`
 }
 
 func main() {
@@ -42,51 +53,55 @@ func main() {
 }
 
 func NewGame() *Game {
-	return &Game{
-		targetNumber: rand.Intn(100),
-		guesses:      make(map[net.Conn]int),
-	}
+    return &Game{
+        TargetNumber: rand.Intn(100),
+        Guesses:      make(map[net.Conn]int),
+    }
 }
 
 func handleClient(conn net.Conn, game *Game) {
-	defer conn.Close()
+    defer conn.Close()
 
-	fmt.Println("New player connected:", conn.RemoteAddr())
+    fmt.Println("New player connected:", conn.RemoteAddr())
 
-	// Welcome message
-	conn.Write([]byte("Welcome to the Guess the Number game!\n"))
+    // Welcome message
+    conn.Write([]byte("Welcome to the Guess the Number game!\n"))
 
-	for {
-		conn.Write([]byte("Enter your guess: "))
-		buffer := make([]byte, 1024)
-		n, err := conn.Read(buffer)
-		if err != nil {
-			fmt.Println("Client disconnected:", conn.RemoteAddr())
-			return
-		}
+    decoder := json.NewDecoder(conn)
+    encoder := json.NewEncoder(conn)
 
-		input := strings.TrimSpace(string(buffer[:n-1]))
-
-        if input == "quit" {
+    for {
+        var clientMessage ClientMessage
+        if err := decoder.Decode(&clientMessage); err == io.EOF {
             fmt.Println("Client disconnected:", conn.RemoteAddr())
+            return
+        } else if err != nil {
+            fmt.Println("Error decoding message:", err)
             return
         }
 
-		guess, err := strconv.Atoi(strings.TrimSpace(string(buffer[:n-1])))
-		if err != nil {
-			conn.Write([]byte("Invalid input. Please enter a valid number.\n"))
-			continue
-		}
+        switch clientMessage.Command {
+        case "guess":
+            guess := clientMessage.Guess
+            game.Guesses[conn] = guess
 
-		// game.guesses[conn] = guess
-
-		if guess == game.targetNumber {
-			conn.Write([]byte("Congratulations! You guessed the correct number.\n"))
-			return
-		} else if guess < game.targetNumber {
-			conn.Write([]byte("Try a higher number.\n"))
-		} else {
-			conn.Write([]byte("Try a lower number.\n"))
-		}
-	}
+            if guess == game.TargetNumber {
+                response := ServerMessage{Message: "Congratulations! You guessed the correct number."}
+                encoder.Encode(response)
+                return
+            } else if guess < game.TargetNumber {
+                response := ServerMessage{Message: "Try a higher number."}
+                encoder.Encode(response)
+            } else {
+                response := ServerMessage{Message: "Try a lower number."}
+                encoder.Encode(response)
+            }
+        case "quit":
+            fmt.Println("Client disconnected:", conn.RemoteAddr())
+            return
+        default:
+            response := ServerMessage{Message: "Invalid command."}
+            encoder.Encode(response)
+        }
+    }
 }
