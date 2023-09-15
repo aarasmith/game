@@ -81,6 +81,9 @@ func ServeWebSocket(w http.ResponseWriter, r *http.Request, game *Game) {
 	}
 	defer conn.Close()
 
+	// Log client connection
+	fmt.Println("Client connected:", conn.RemoteAddr())
+
 	game.Guesses[conn] = -1 // Initialize the guess
 
 	for {
@@ -115,6 +118,9 @@ func ServeWebSocket(w http.ResponseWriter, r *http.Request, game *Game) {
 				conn.WriteJSON(struct{ Message string `json:"message"` }{Message: "Try a lower number."})
 			}
 		case "quit":
+			// Log client disconnection
+			fmt.Println("Client disconnected:", conn.RemoteAddr())
+
 			delete(game.Guesses, conn)
 			break
 		default:
