@@ -109,8 +109,6 @@ func ServeWebSocket(w http.ResponseWriter, r *http.Request, game *Game) {
     player := &Player{
         ID:   playerID,
         Conn: conn,
-        X: 1,
-        Y: 1,
     }
     players[playerID] = player
 
@@ -122,6 +120,51 @@ func ServeWebSocket(w http.ResponseWriter, r *http.Request, game *Game) {
 
     // Assign initial (x, y) positions to all players
     assignInitialPositions()
+
+    conn.WriteJSON(struct {
+        PlayerX       int    `json:"player_x"`
+        PlayerY       int    `json:"player_y"`
+    }{
+        PlayerX: player.X,
+        PlayerY: player.Y,
+    })
+
+    // Variables to store the previous X and Y positions
+    prevX := player.X
+    prevY := player.Y
+
+    go func() {
+        for {
+            // Generate random X and Y values between 1 and 10
+            newX := rand.Intn(10)
+            newY := rand.Intn(10)
+
+            // Update player's positions
+            player.X = newX
+            player.Y = newY
+
+            // Check if PlayerX or PlayerY has changed
+            if prevX != newX || prevY != newY {
+                // Send a message to the client with the updated positions
+                conn.WriteJSON(struct {
+                    Message string `json:"message"`
+                    PlayerX int    `json:"player_x"`
+                    PlayerY int    `json:"player_y"`
+                }{
+                    Message: fmt.Sprintf("Your position has changed. New X: %d, New Y: %d", newX, newY),
+                    PlayerX: newX,
+                    PlayerY: newY,
+                })
+
+                // Update the previous positions
+                prevX = newX
+                prevY = newY
+            }
+
+            // Sleep for 5 seconds before the next update
+            time.Sleep(5 * time.Second)
+        }
+    }()
 
     for {
         var message struct {
@@ -137,14 +180,6 @@ func ServeWebSocket(w http.ResponseWriter, r *http.Request, game *Game) {
             // Handle client disconnection here if needed
             break
         }
-
-        conn.WriteJSON(struct {
-            PlayerX       int    `json:"player_x"`
-            PlayerY       int    `json:"player_y"`
-        }{
-            PlayerX: player.X,
-            PlayerY: player.Y,
-        })
 
         switch message.Command {
         case "guess":
@@ -204,6 +239,24 @@ func ServeWebSocket(w http.ResponseWriter, r *http.Request, game *Game) {
                 Message: "Invalid command.",
             })
         }
+
+        // Check if PlayerX or PlayerY has changed
+        if prevX != player.X || prevY != player.Y {
+            // Send a message to the client with the updated positions
+            conn.WriteJSON(struct {
+                Message string `json:"message"`
+                PlayerX int    `json:"player_x"`
+                PlayerY int    `json:"player_y"`
+            }{
+                Message: fmt.Sprintf("Your position has changed. New X: %d, New Y: %d", player.X, player.Y),
+                PlayerX: player.X,
+                PlayerY: player.Y,
+            })
+
+            // Update the previous positions
+            prevX = player.X
+            prevY = player.Y
+        }
     }
 }
 
@@ -221,3 +274,4 @@ func assignInitialPositions() {
         player.Y = rand.Intn(10) // MaxY is the maximum y-coordinate
     }
 }
+
