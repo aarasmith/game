@@ -42,6 +42,23 @@ type ServerMessage struct {
     Message string `json:"message"`
 }
 
+// Define a Player struct
+type Player struct {
+    ID   int
+    Conn *websocket.Conn
+}
+
+// Create a map to store players by their IDs
+var players = make(map[int]*Player)
+var currentPlayerID = 1 // Initialize the player ID counter
+
+// Define a list to store connected clients
+var connectedClients = make([]*websocket.Conn, 0)
+
+// Create a variable to track the game state
+var gameActive = true
+
+
 func main() {
     rand.Seed(time.Now().UnixNano())
 
@@ -74,57 +91,123 @@ func ServeHome(w http.ResponseWriter, r *http.Request) {
 }
 
 func ServeWebSocket(w http.ResponseWriter, r *http.Request, game *Game) {
-	conn, err := upgrader.Upgrade(w, r, nil)
-	if err != nil {
-		fmt.Println("Error upgrading to WebSocket:", err)
-		return
-	}
-	defer conn.Close()
+    conn, err := upgrader.Upgrade(w, r, nil)
+    if err != nil {
+        fmt.Println("Error upgrading to WebSocket:", err)
+        return
+    }
+    defer conn.Close()
 
-	// Log client connection
-	fmt.Println("Client connected:", conn.RemoteAddr())
+    // Generate a unique player ID for this client
+    playerID := currentPlayerID
+    currentPlayerID++
 
-	game.Guesses[conn] = -1 // Initialize the guess
+    // Create a new Player object and store it in the map
+    player := &Player{
+        ID:   playerID,
+        Conn: conn,
+    }
+    players[playerID] = player
 
-	for {
-		var message struct {
-			Command string `json:"command"`
-			Guess   int    `json:"guess"`
-		}
+    // Log client connection
+    fmt.Printf("Player %d connected: %s\n", playerID, conn.RemoteAddr())
 
-		err := conn.ReadJSON(&message)
-		if err != nil {
-			fmt.Println("Error reading message:", err)
-			delete(game.Guesses, conn)
-			break
-		}
+    // Add the client's connection to the list of connected clients
+    connectedClients = append(connectedClients, conn)
 
-		switch message.Command {
-		case "guess":
-			game.Guesses[conn] = message.Guess
+    game.Guesses[conn] = -1 // Initialize the guess
 
-			if message.Guess == game.TargetNumber {
-				response := struct {
-					Message string `json:"message"`
-					Win     bool   `json:"win"`
-				}{
-					Message: "Congratulations! You guessed the correct number.",
-					Win:     true,
-				}
-				conn.WriteJSON(response)
-			} else if message.Guess < game.TargetNumber {
-				conn.WriteJSON(struct{ Message string `json:"message"` }{Message: "Try a higher number."})
-			} else {
-				conn.WriteJSON(struct{ Message string `json:"message"` }{Message: "Try a lower number."})
-			}
-		case "quit":
-			// Log client disconnection
-			fmt.Println("Client disconnected:", conn.RemoteAddr())
+    for {
+        var message struct {
+            Command string `json:"command"`
+            Guess   int    `json:"guess"`
+        }
 
-			delete(game.Guesses, conn)
-			break
-		default:
-			conn.WriteJSON(struct{ Message string `json:"message"` }{Message: "Invalid command."})
-		}
-	}
+        err := conn.ReadJSON(&message)
+        if err != nil {
+            fmt.Println("Error reading message:", err)
+            delete(game.Guesses, conn)
+
+            // Log client disconnection
+            fmt.Printf("Player %d disconnected: %s\n", playerID, conn.RemoteAddr())
+
+            // Remove the client's connection from the list of connected clients
+            for i, client := range connectedClients {
+                if client == conn {
+                    connectedClients = append(connectedClients[:i], connectedClients[i+1:]...)
+                    break
+                }
+            }
+
+            // Delete the player from the map
+            delete(players, playerID)
+            break
+        }
+
+        switch message.Command {
+        case "guess":
+            // Check if the game is still active
+            if gameActive {
+                // Use playerID to identify the player making the guess
+                game.Guesses[conn] = message.Guess
+
+                if message.Guess == game.TargetNumber {
+                    response := struct {
+                        Message string `json:"message"`
+                        Win     bool   `json:"win"`
+                    }{
+                        Message: "Congratulations! You guessed the correct number.",
+                        Win:     true,
+                    }
+                    conn.WriteJSON(response)
+
+                    // Notify all other connected clients except the current player
+                    notification := struct {
+                        Message string `json:"message"`
+                    }{
+                        Message: fmt.Sprintf("Player %d guessed the correct number!", playerID),
+                    }
+
+                    for _, client := range connectedClients {
+                        if client != conn {
+                            // Send the notification to other clients
+                            err := client.WriteJSON(notification)
+                            if err != nil {
+                                fmt.Println("Error sending notification:", err)
+                            }
+                        }
+                    }
+
+                    // Update the game state to indicate that it's over
+                    gameActive = false
+                } else if message.Guess < game.TargetNumber {
+                    conn.WriteJSON(struct{ Message string `json:"message"` }{Message: "Try a higher number."})
+                } else {
+                    conn.WriteJSON(struct{ Message string `json:"message"` }{Message: "Try a lower number."})
+                }
+            } else {
+                // If the game is not active, inform the player that the game is over
+                conn.WriteJSON(struct{ Message string `json:"message"` }{Message: "The game is over. You can't guess anymore."})
+            }
+
+        case "quit":
+            // Log client disconnection
+            fmt.Printf("Player %d disconnected: %s\n", playerID, conn.RemoteAddr())
+
+            // Remove the client's connection from the list of connected clients
+            for i, client := range connectedClients {
+                if client == conn {
+                    connectedClients = append(connectedClients[:i], connectedClients[i+1:]...)
+                    break
+                }
+            }
+
+            // Delete the player from the map
+            delete(players, playerID)
+            delete(game.Guesses, conn)
+            break
+
+        // ...
+        }
+    }
 }
