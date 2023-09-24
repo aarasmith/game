@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Guess the Position Game</title>
+    <script>
+        var socket = new WebSocket("wss://code.arasmith.org/proxy/9999/ws");
+
+        socket.onopen = function(event) {
+            console.log("WebSocket connection established.");
+        };
+
+        socket.onmessage = function(event) {
+            var message = JSON.parse(event.data);
+            if (message.message) {
+                // Display server messages to the user.
+                document.getElementById("message").textContent = message.message;
+            }
+            if (message.win) {
+                // Disable the input fields when the game is won.
+                document.getElementById("targetPlayerID").disabled = true;
+                document.getElementById("guessX").disabled = true;
+                document.getElementById("guessY").disabled = true;
+                document.getElementById("submitGuess").disabled = true;
+            }
+            if (message.player_x !== undefined && message.player_y !== undefined) {
+                // Display the current player's assigned X and Y values.
+                document.getElementById("playerX").textContent = `Your X: ${message.player_x}`;
+                document.getElementById("playerY").textContent = `Your Y: ${message.player_y}`;
+            }
+        };
+
+        socket.onclose = function(event) {
+            if (event.wasClean) {
+                console.log(`Closed cleanly, code=${event.code}, reason=${event.reason}`);
+            } else {
+                console.error("Connection died");
+            }
+        };
+
+        function sendGuess() {
+            var targetPlayerID = parseInt(document.getElementById("targetPlayerID").value);
+            var guessX = parseInt(document.getElementById("guessX").value);
+            var guessY = parseInt(document.getElementById("guessY").value);
+
+            // Check for valid inputs
+            if (!isNaN(targetPlayerID) && !isNaN(guessX) && !isNaN(guessY)) {
+                var message = {
+                    command: "guess",
+                    target_player_id: targetPlayerID,
+                    guess_x: guessX,
+                    guess_y: guessY
+                };
+                socket.send(JSON.stringify(message));
+            }
+        }
+
+        function quitGame() {
+            var message = {
+                command: "quit"
+            };
+            socket.send(JSON.stringify(message));
+            socket.close();
+        }
+    </script>
+</head>
+<body>
+    <h1>Guess the Position Game</h1>
+    <p>Try to guess the positions of other players.</p>
+    <p id="message"></p>
+    <p id="playerX">Your X: </p>
+    <p id="playerY">Your Y: </p>
+    <div class="player-guess">
+        <label for="targetPlayerID">Enter Target Player ID:</label>
+        <input type="number" id="targetPlayerID" min="1">
+    </div>
+    <div class="player-guess">
+        <label for="guessX">Guess X Coordinate:</label>
+        <input type="number" id="guessX" min="0" max="100">
+    </div>
+    <div class="player-guess">
+        <label for="guessY">Guess Y Coordinate:</label>
+        <input type="number" id="guessY" min="0" max="100">
+    </div>
+    <button id="submitGuess" onclick="sendGuess()">Submit Guess</button>
+    <button onclick="quitGame()">Quit Game</button>
+</body>
+</html>
